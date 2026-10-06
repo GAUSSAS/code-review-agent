@@ -1,0 +1,10 @@
+# 代码审查 Agent 运行依赖
+#
+# 只需要一个第三方包：openai。
+# 选择 openai SDK 而不是某个厂商专用 SDK，是因为它兼容所有
+# OpenAI 协议实现（DeepSeek、通义千问、Kimi、智谱、vLLM、Ollama 等），
+# 换服务商只需改 .env 里的 LLM_BASE_URL / LLM_MODEL。
+openai>=1.40.0,<2.0.0
+
+# 测试与开发依赖
+pytest>=8.0.0

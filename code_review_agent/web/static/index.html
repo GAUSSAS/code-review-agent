@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>代码审查 Agent</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --panel-2: #1b232e;
+    --border: #29323d;
+    --text: #d7dee8;
+    --muted: #8b98a8;
+    --accent: #a371f7;
+    --accent-dim: #6d3fbd;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --info: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .app { display: grid; grid-template-columns: 330px 1fr; height: 100vh; overflow: hidden; }
+
+  /* ---------------- 侧栏 ---------------- */
+  .sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 18px 16px;
+    overflow-y: auto;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .brand h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 0 0 18px; }
+  .field { margin-bottom: 13px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  input[type=text], textarea, select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 58px; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent-dim); }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); margin-bottom: 9px; }
+  .check input { accent-color: var(--accent); }
+  button {
+    width: 100%; border: 0; border-radius: 7px; padding: 10px;
+    font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+    background: var(--accent); color: #fff; transition: filter .15s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.12); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border); font-weight: 500; font-size: 12px; padding: 7px;
+  }
+  .row { display: flex; gap: 7px; }
+  .row.align { align-items: center; }
+  .row.align input[type=text] { flex: 1; }
+  .row.align button { width: auto; padding: 0 14px; height: 32px; font-size: 12px; font-weight: 500; }
+  #keyField button { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  #keyField button:hover:not(:disabled) { border-color: var(--accent-dim); }
+  .kstatus { margin-top: 6px; font-size: 12px; min-height: 17px; color: var(--muted); }
+  .kstatus.ok { color: var(--ok); }
+  .kstatus.bad { color: var(--err); }
+  .kstatus.busy { color: var(--info); }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 7px; line-height: 1.5; }
+  .divider { height: 1px; background: var(--border); margin: 16px 0; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .stats-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+  .stats-head span { font-size: 12px; color: var(--muted); }
+  .stats-head .when { margin-left: auto; font-size: 11px; }
+  .icon-btn {
+    width: 22px; height: 22px; padding: 0; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .icon-btn:hover:not(:disabled) { border-color: var(--accent-dim); }
+  .icon-btn .ring {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 1.6px solid var(--muted); border-top-color: transparent;
+  }
+  .icon-btn.spinning .ring { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tool-toggle {
+    margin-left: auto; font-size: 11px; color: var(--muted);
+    background: none; border: 0; padding: 0 2px; cursor: pointer; width: auto;
+  }
+  .tool-toggle:hover { color: var(--accent); }
+  .stat { background: var(--panel-2); border-radius: 6px; padding: 7px 9px; }
+  .stat .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .v { font-size: 15px; font-family: var(--mono); margin-top: 1px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .tag {
+    font-size: 11px; font-family: var(--mono); color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 6px;
+  }
+
+  /* ---------------- 主区 ---------------- */
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+  .topbar {
+    display: flex; align-items: center; gap: 11px;
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+    background: var(--panel); flex-shrink: 0;
+  }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .pulse.on { background: var(--info); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  .status { font-size: 13px; }
+  .status.err { color: var(--err); }
+  .status.ok { color: var(--ok); }
+  .topbar .meta { margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+  .timeline { flex: 1; overflow-y: auto; padding: 20px 22px 26px; scroll-behavior: smooth; }
+  .welcome { max-width: 620px; margin: 34px auto; text-align: center; color: var(--muted); }
+  .welcome h2 { color: var(--text); font-size: 17px; margin-bottom: 8px; }
+  .welcome ol { text-align: left; display: inline-block; margin: 14px 0 0; padding-left: 20px; line-height: 2; }
+  .welcome code { font-family: var(--mono); color: var(--accent); }
+
+  .item { margin-bottom: 12px; animation: fade .22s ease-out; }
+  @keyframes fade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  .badge {
+    font-size: 11px; font-family: var(--mono); font-weight: 600;
+    padding: 1px 7px; border-radius: 4px; margin-right: 8px;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .b-step  { color: var(--muted);  background: var(--panel-2); border-color: var(--border); }
+  .b-think { color: var(--info);   background: rgba(88,166,255,.11); border-color: rgba(88,166,255,.3); }
+  .b-tool  { color: var(--warn);   background: rgba(210,153,34,.11); border-color: rgba(210,153,34,.3); }
+  .b-ok    { color: var(--ok);     background: rgba(63,185,80,.11);  border-color: rgba(63,185,80,.3); }
+  .b-err   { color: var(--err);    background: rgba(248,81,73,.11);  border-color: rgba(248,81,73,.3); }
+  .b-final { color: var(--accent); background: rgba(163,113,247,.13); border-color: rgba(163,113,247,.35); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 13px;
+  }
+  .card.think { border-left: 3px solid var(--info); white-space: pre-wrap; }
+  .card.tool  { border-left: 3px solid var(--warn); }
+  .card.result-ok  { border-left: 3px solid var(--ok); }
+  .card.result-err { border-left: 3px solid var(--err); }
+  .card.err { border-left: 3px solid var(--err); color: #ffb4ae; }
+  .tool-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+  .args {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    background: var(--bg); border-radius: 5px; padding: 6px 8px;
+    margin-top: 7px; white-space: pre-wrap; word-break: break-all;
+  }
+  pre.out {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+    background: var(--bg); border-radius: 5px; padding: 8px 10px;
+    margin: 7px 0 0; max-height: 260px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word; color: #b9c4d0;
+  }
+  .empty-line { padding: 2px 0; }
+  .itemhead { display: flex; align-items: center; }
+
+  /* ---------------- 报告 ---------------- */
+  .report { background: var(--panel); border: 1px solid var(--accent-dim); border-radius: 9px; overflow: hidden; }
+  .report-head {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 13px; background: rgba(163,113,247,.1);
+    border-bottom: 1px solid var(--border);
+  }
+  .report-head strong { font-size: 13px; }
+  .report-head .sp { margin-left: auto; }
+  .report-body { padding: 6px 16px 16px; }
+  .report-body h1, .report-body h2 { font-size: 15px; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin: 18px 0 9px; }
+  .report-body h3 { font-size: 13.5px; margin: 15px 0 6px; color: var(--accent); }
+  .report-body h4 { font-size: 13px; margin: 12px 0 5px; }
+  .report-body p { margin: 7px 0; }
+  .report-body ul, .report-body ol { margin: 7px 0; padding-left: 22px; }
+  .report-body li { margin: 3px 0; }
+  .report-body code {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; color: #e6b673;
+  }
+  .report-body pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; overflow-x: auto; margin: 9px 0;
+  }
+  .report-body pre code { background: none; border: 0; padding: 0; color: #b9c4d0; font-size: 12px; }
+  .report-body blockquote {
+    border-left: 3px solid var(--border); margin: 9px 0;
+    padding: 2px 0 2px 12px; color: var(--muted);
+  }
+  .report-body table { border-collapse: collapse; margin: 9px 0; font-size: 12.5px; }
+  .report-body th, .report-body td { border: 1px solid var(--border); padding: 5px 9px; }
+  .report-body th { background: var(--panel-2); }
+  .sev { font-weight: 600; padding: 0 5px; border-radius: 3px; font-size: 11.5px; }
+  .sev-blocker { color: #fff; background: var(--err); }
+  .sev-major   { color: var(--err); }
+  .sev-minor   { color: var(--warn); }
+  .sev-info    { color: var(--muted); }
+
+  /* ---------------- 追问 ---------------- */
+  .composer {
+    display: none; gap: 9px; padding: 13px 20px;
+    border-top: 1px solid var(--border); background: var(--panel); flex-shrink: 0;
+  }
+  .composer.show { display: flex; }
+  .composer textarea { min-height: 40px; max-height: 120px; }
+  .composer button { width: auto; padding: 0 20px; }
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--border);
+    padding: 9px 16px; border-radius: 7px; font-size: 13px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 20;
+  }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 880px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { border-right: 0; border-bottom: 1px solid var(--border); max-height: 46vh; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===================== 侧栏 ===================== -->
+  <aside class="sidebar">
+    <div class="brand"><span class="dot"></span><h1>代码审查 Agent</h1></div>
+    <p class="sub">LLM + 工具调用 · 自主侦查与取证</p>
+
+    <div class="field">
+      <label for="workspace">被审查目录</label>
+      <div class="row align">
+        <input id="workspace" type="text" placeholder="点右侧按钮选目录，或直接粘贴路径" spellcheck="false" />
+        <button id="browseBtn" title="弹出系统文件夹选择框">浏览…</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <select id="rootSelect" title="快速选用已允许的目录">
+          <option value="">（加载中…）</option>
+        </select>
+      </div>
+      <div class="kstatus" id="wsHint"></div>
+    </div>
+
+    <div class="field" id="keyField">
+      <label for="apiKey">API Key <span id="keyBadge" style="color:var(--muted)"></span></label>
+      <div class="row align">
+        <input id="apiKey" type="password" placeholder="留空则使用服务端 .env" spellcheck="false" autocomplete="off" />
+        <button id="testBtn" title="用这个 Key 发一次最小请求，验证 Key、网络与模型名">测试连接</button>
+      </div>
+      <div class="kstatus" id="keyStatus"></div>
+      <label class="check" style="margin-top:2px">
+        <input id="rememberKey" type="checkbox" /> 在本标签页内记住（关闭标签页即清除）
+      </label>
+      <p class="hint">
+        Key 仅用于本次请求并<strong>保留在服务端内存</strong>，不写入磁盘、不写日志；本页只在
+        127.0.0.1 上使用。若此处填写，将覆盖服务端 <code>.env</code> 中的配置。
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="scope">审查范围</label>
+      <select id="scope">
+        <option value="all">整个目录</option>
+        <option value="file">指定单个文件</option>
+      </select>
+    </div>
+
+    <div class="field" id="pathField" style="display:none">
+      <label for="path">文件相对路径</label>
+      <input id="path" type="text" placeholder="例如 app/service.py" spellcheck="false" />
+    </div>
+
+    <div class="field">
+      <label for="focus">重点关注（可选）</label>
+      <input id="focus" type="text" placeholder="例如 并发安全 / 性能 / 安全漏洞" />
+    </div>
+
+    <div class="field">
+      <label for="language">技术栈提示（可选）</label>
+      <input id="language" type="text" placeholder="例如 Python 3.12 / FastAPI" />
+    </div>
+
+    <div class="field">
+      <label for="maxSteps">最大步数（1~50）</label>
+      <input id="maxSteps" type="text" value="12" />
+      <div class="kstatus" id="stepsHint"></div>
+    </div>
+
+    <label class="check"><input id="saveReport" type="checkbox" /> 审查完成后保存 report.md</label>
+    <label class="check"><input id="interactive" type="checkbox" checked /> 允许审查后追问</label>
+
+    <button id="startBtn">开始审查</button>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" id="stopBtn" disabled>停止</button>
+      <button class="ghost" id="clearBtn">清空</button>
+    </div>
+    <p class="hint" id="configHint"></p>
+
+    <div class="divider"></div>
+
+    <div class="stats-head">
+      <span>统计</span>
+      <button class="icon-btn" id="refreshStats" title="立即拉取最新统计（步数、工具调用、token）">
+        <span class="ring"></span>
+      </button>
+      <span class="when" id="statsWhen"></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">步数</div><div class="v" id="stSteps">0</div></div>
+      <div class="stat"><div class="k">工具调用</div><div class="v" id="stTools">0</div></div>
+      <div class="stat"><div class="k">输入 token</div><div class="v" id="stIn">0</div></div>
+      <div class="stat"><div class="k">输出 token</div><div class="v" id="stOut">0</div></div>
+    </div>
+
+    <div class="divider"></div>
+    <div class="stats-head">
+      <span>可用工具</span>
+      <button class="tool-toggle" id="toggleTools">隐藏</button>
+    </div>
+    <div class="tools" id="toolTags"></div>
+  </aside>
+
+  <!-- ===================== 主区 ===================== -->
+  <main class="main">
+    <div class="topbar">
+      <span class="pulse" id="pulse"></span>
+      <span class="status" id="statusText">就绪</span>
+      <span class="meta" id="metaText"></span>
+    </div>
+
+    <div class="timeline" id="timeline">
+      <div class="welcome" id="welcome">
+        <h2>开始一次代码审查</h2>
+        <p>Agent 会自己决定读哪些文件、跑不跑测试，而不是把整个仓库塞给模型。</p>
+        <ol>
+          <li>在左侧填写<b>被审查目录</b>（相对服务启动目录，<code>.</code> 表示当前目录）</li>
+          <li>可选填<b>重点关注</b>，例如「并发安全」</li>
+          <li>点击<b>开始审查</b>，右侧会实时显示每一步推理与工具调用</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="composer" id="composer">
+      <textarea id="chatInput" placeholder="继续追问，例如：第 2 个问题请给出修复后的完整代码（Ctrl+Enter 发送）"></textarea>
+      <button id="sendBtn">发送</button>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const APP_CONFIG = __APP_CONFIG__;
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  workspace: $("workspace"), browseBtn: $("browseBtn"),
+  rootSelect: $("rootSelect"), wsHint: $("wsHint"),
+  scope: $("scope"), pathField: $("pathField"), path: $("path"),
+  focus: $("focus"), language: $("language"), maxSteps: $("maxSteps"), stepsHint: $("stepsHint"),
+  apiKey: $("apiKey"), keyBadge: $("keyBadge"), keyStatus: $("keyStatus"),
+  testBtn: $("testBtn"), rememberKey: $("rememberKey"),
+  saveReport: $("saveReport"), interactive: $("interactive"),
+  startBtn: $("startBtn"), stopBtn: $("stopBtn"), clearBtn: $("clearBtn"),
+  configHint: $("configHint"), timeline: $("timeline"), welcome: $("welcome"),
+  pulse: $("pulse"), statusText: $("statusText"), metaText: $("metaText"),
+  stSteps: $("stSteps"), stTools: $("stTools"), stIn: $("stIn"), stOut: $("stOut"),
+  refreshStats: $("refreshStats"), statsWhen: $("statsWhen"), toggleTools: $("toggleTools"),
+  toolTags: $("toolTags"), composer: $("composer"), chatInput: $("chatInput"), sendBtn: $("sendBtn"),
+  toast: $("toast"),
+};
+
+const state = {
+  sid: null, source: null, running: false, finalText: "", t0: 0, timer: null,
+  lastStep: 0, toolCalls: 0, tokensIn: 0, tokensOut: 0,
+};
+const KEY_STORE = "cra.apiKey";
+const KEY_FLAG = "cra.rememberKey";
+
+/* ------------------------------ 小工具 ------------------------------ */
+function toast(msg) {
+  els.toast.textContent = msg;
+  els.toast.classList.add("show");
+  setTimeout(() => els.toast.classList.remove("show"), 2200);
+}
+function setStatus(text, kind) {
+  els.statusText.textContent = text;
+  els.statusText.className = "status" + (kind ? " " + kind : "");
+}
+function setPulse(on) {
+  els.pulse.className = "pulse" + (on ? " on" : "");
+}
+function elapsed() {
+  if (!state.t0) return "";
+  const s = ((Date.now() - state.t0) / 1000).toFixed(1);
+  return s + "s";
+}
+function tickMeta() {
+  if (state.running) els.metaText.textContent = "已运行 " + elapsed();
+}
+
+/* 统计面板：步数/工具调用在事件到达时立即累加，token 由 stats 事件刷新。
+   这样审查过程中数字就是活的，而不是等结束才一次性跳变。 */
+function renderCounters() {
+  els.stSteps.textContent = state.lastStep || 0;
+  els.stTools.textContent = state.toolCalls || 0;
+  els.stIn.textContent = state.tokensIn || 0;
+  els.stOut.textContent = state.tokensOut || 0;
+}
+
+function resetCounters() {
+  state.lastStep = 0; state.toolCalls = 0; state.tokensIn = 0; state.tokensOut = 0;
+  renderCounters();
+}
+
+function bumpStep(step) {
+  if (step && step > state.lastStep) {
+    state.lastStep = step;
+    els.stSteps.textContent = step;
+  }
+}
+
+/* 用一份权威统计（来自 stats 事件或 /api/stats）校准所有计数 */
+function applyStats(data) {
+  const d = data || {};
+  const usage = d.usage || {};
+  if (d.steps != null) state.lastStep = d.steps;
+  if (d.tool_calls != null) state.toolCalls = d.tool_calls;
+  state.tokensIn = usage.prompt_tokens || 0;
+  state.tokensOut = usage.completion_tokens || 0;
+  renderCounters();
+}
+
+function stampStats() {
+  const t = new Date();
+  els.statsWhen.textContent = "更新于 " +
+    String(t.getHours()).padStart(2, "0") + ":" +
+    String(t.getMinutes()).padStart(2, "0") + ":" +
+    String(t.getSeconds()).padStart(2, "0");
+}
+
+function clearStatsStamp() {
+  els.statsWhen.textContent = "";
+}
+
+/* 手动刷新统计：作为实时推送之外的兜底，也是排查 SSE 是否正常的诊断手段 */
+async function refreshStats() {
+  if (!state.sid) { toast("还没有会话，请先开始一次审查"); return; }
+  els.refreshStats.classList.add("spinning");
+  els.refreshStats.disabled = true;
+  try {
+    const resp = await fetch("/api/stats?sid=" + encodeURIComponent(state.sid));
+    const raw = await resp.text();
+    let data = null;
+    try { data = JSON.parse(raw); } catch (e) { /* 可能返回 HTML 错误页 */ }
+
+    if (!resp.ok || !data || data.ok === false) {
+      // 附带状态码，便于区分「服务端是旧版本(404)」与「参数/会话问题(400/404)」
+      const detail = (data && data.error) || raw.slice(0, 120).replace(/\s+/g, " ").trim();
+      if (resp.status === 404) {
+        throw new Error("404 " + (detail || "接口不存在") +
+          " —— 服务端可能仍在运行旧代码，请 Ctrl+C 后重新启动 web 服务");
+      }
+      throw new Error("HTTP " + resp.status + " " + (detail || "无响应内容"));
+    }
+
+    applyStats(data.stats);
+    stampStats();
+    const s = data.stats || {};
+    toast("已刷新 · 步数 " + (s.steps || 0) + " · 工具 " + (s.tool_calls || 0) +
+          " · " + (data.status === "running" ? "仍在运行" : "已结束"));
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    toast("刷新失败：" + msg);
+    console.warn("[refreshStats] 失败：", err);
+  } finally {
+    els.refreshStats.classList.remove("spinning");
+    els.refreshStats.disabled = false;
+  }
+}
+
+function toggleTools() {
+  const hidden = els.toolTags.style.display === "none";
+  els.toolTags.style.display = hidden ? "flex" : "none";
+  els.toggleTools.textContent = hidden ? "隐藏" : "显示";
+}
+
+/* ------------------------------ 被审查目录 ------------------------------ */
+/* 目录选择有两种方式：
+   1. 点「浏览…」→ 服务端弹出**系统原生**文件夹选择框（浏览器拿不到本地绝对路径，
+      只能由服务端在用户桌面会话里弹窗）；
+   2. 从下拉框里快速选用已允许的根目录，或直接粘贴路径。
+   允许的目录清单由服务端下发（默认根 + --allow-root 指定的目录）。 */
+function setRoots(roots) {
+  els.rootSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "快速选择已允许的目录…";
+  els.rootSelect.appendChild(placeholder);
+
+  (roots || []).forEach((r) => {
+    const opt = document.createElement("option");
+    opt.value = r;
+    opt.textContent = r;
+    els.rootSelect.appendChild(opt);
+  });
+}
+
+function clearWsHint() {
+  els.wsHint.textContent = "";
+  els.wsHint.className = "kstatus";
+}
+
+function wsHint(text, kind) {
+  els.wsHint.textContent = text || "";
+  els.wsHint.className = "kstatus" + (kind ? " " + kind : "");
+}
+
+/* 直接使用输入框里的路径——不再需要在前端拼字符串，
+   后端会完成校验并告诉我们命中了哪个允许的根。 */
+function currentWorkspace() {
+  return (els.workspace.value || "").trim() || ".";
+}
+
+function previewWorkspace() {
+  const ws = currentWorkspace();
+  wsHint(ws.length > 70 ? "将审查：" + ws.slice(0, 70) + "…" : "将审查：" + ws);
+}
+
+/* 弹出系统原生目录选择框 */
+async function browseFolder() {
+  const initial = (els.workspace.value || "").trim();
+  els.browseBtn.disabled = true;
+  els.browseBtn.textContent = "选择中…";
+  wsHint("请在弹出的窗口中选取目录（若未出现，请查看任务栏）");
+  try {
+    const data = await postJson("/api/browse", { initial: initial || undefined });
+    if (data.cancelled) {
+      wsHint("已取消选择");
+      return;
+    }
+    if (!data.ok) {
+      wsHint("打开选择框失败：" + (data.error || "未知错误"), "bad");
+      return;
+    }
+    els.workspace.value = data.path;
+    if (data.allowed === false) {
+      // 选到了白名单之外的目录：直接告诉用户该怎么开放
+      wsHint(data.error || "该目录不在允许范围内", "bad");
+    } else {
+      previewWorkspace();
+    }
+  } catch (err) {
+    wsHint("打开选择框失败：" + err.message, "bad");
+  } finally {
+    els.browseBtn.disabled = false;
+    els.browseBtn.textContent = "浏览…";
+  }
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function scrollDown() {
+  els.timeline.scrollTop = els.timeline.scrollHeight;
+}
+function hideWelcome() {
+  if (els.welcome && els.welcome.parentNode) els.welcome.remove();
+}
+function addItem(html, cardClass) {
+  hideWelcome();
+  const wrap = document.createElement("div");
+  wrap.className = "item";
+  wrap.innerHTML = cardClass
+    ? '<div class="card ' + cardClass + '">' + html + "</div>"
+    : html;
+  els.timeline.appendChild(wrap);
+  scrollDown();
+  return wrap;
+}
+
+/* ------------------------ 极简 Markdown 渲染 ------------------------ */
+function inlineMd(text) {
+  let s = escapeHtml(text);
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 严重程度着色：`阻塞` / 严重 / 一般 / 建议
+  s = s.replace(/\[(阻塞|严重|一般|建议)\]/g, (m, p) => {
+    const map = { "阻塞": "blocker", "严重": "major", "一般": "minor", "建议": "info" };
+    return '<span class="sev sev-' + map[p] + '">' + p + "</span>";
+  });
+  return s;
+}
+
+function renderMarkdown(src) {
+  const lines = String(src || "").split(/\r?\n/);
+  const out = [];
+  let inCode = false, fence = "", listType = "", para = [];
+
+  const flushPara = () => {
+    if (para.length) { out.push("<p>" + inlineMd(para.join(" ")) + "</p>"); para = []; }
+  };
+  const closeList = () => { if (listType) { out.push("</" + listType + ">"); listType = ""; } };
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    const fenceMatch = line.match(/^\s*(```|~~~)\s*([\w+-]*)\s*$/);
+
+    if (fenceMatch) {
+      if (inCode) {
+        if (fenceMatch[1] === fence) { out.push("</code></pre>"); inCode = false; fence = ""; }
+        else { out.push(escapeHtml(raw)); }
+      } else {
+        flushPara(); closeList();
+        fence = fenceMatch[1];
+        out.push('<pre><code class="lang-' + escapeHtml(fenceMatch[2] || "text") + '">');
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) { out.push(escapeHtml(raw)); continue; }
+
+    if (!line.trim()) { flushPara(); closeList(); continue; }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      flushPara(); closeList();
+      const lvl = Math.min(h[1].length, 5);
+      out.push("<h" + lvl + ">" + inlineMd(h[2]) + "</h" + lvl + ">");
+      continue;
+    }
+    if (/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(line)) {
+      flushPara(); closeList(); out.push("<hr />"); continue;
+    }
+    const bq = line.match(/^>\s?(.*)$/);
+    if (bq) {
+      flushPara(); closeList();
+      out.push("<blockquote>" + inlineMd(bq[1]) + "</blockquote>");
+      continue;
+    }
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ul) {
+      flushPara();
+      if (listType !== "ul") { closeList(); out.push("<ul>"); listType = "ul"; }
+      out.push("<li>" + inlineMd(ul[1]) + "</li>");
+      continue;
+    }
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ol) {
+      flushPara();
+      if (listType !== "ol") { closeList(); out.push("<ol>"); listType = "ol"; }
+      out.push("<li>" + inlineMd(ol[1]) + "</li>");
+      continue;
+    }
+    para.push(line.trim());
+  }
+  flushPara(); closeList();
+  if (inCode) out.push("</code></pre>");
+  return out.join("\n");
+}
+
+/* ------------------------------ 事件渲染 ------------------------------ */
+function renderEvent(ev) {
+  const step = ev.step ? '<span class="badge b-step">第 ' + ev.step + " 步</span>" : "";
+  switch (ev.type) {
+    case "start":
+      addItem(
+        '<div class="itemhead"><span class="badge b-think">启动</span>' +
+        '<span style="font-size:12.5px;color:var(--muted)">' + escapeHtml(ev.text || "") + "</span></div>"
+      );
+      break;
+
+    case "assistant":
+      bumpStep(ev.step);
+      addItem(
+        step + '<span class="badge b-think">推理</span>' +
+        '<div style="margin-top:7px">' + escapeHtml(ev.text || "") + "</div>",
+        "think"
+      );
+      break;
+
+    case "tool_call": {
+      bumpStep(ev.step);
+      state.toolCalls += 1;
+      els.stTools.textContent = state.toolCalls;
+      const args = ev.arguments ? JSON.stringify(ev.arguments, null, 2) : (ev.text || "{}");
+      addItem(
+        step + '<span class="badge b-tool">工具</span><span class="tool-name">' +
+        escapeHtml(ev.tool || "") + "</span>" +
+        '<div class="args">' + escapeHtml(args) + "</div>",
+        "tool"
+      );
+      break;
+    }
+
+    case "tool_result": {
+      const ok = ev.ok !== false;
+      const body = escapeHtml(ev.text || "(无输出)");
+      addItem(
+        '<div class="itemhead"><span class="badge ' + (ok ? "b-ok" : "b-err") + '">' +
+        (ok ? "成功" : "失败") + "</span>" +
+        '<span class="tool-name">' + escapeHtml(ev.tool || "") + " 返回</span>" +
+        (ev.truncated ? '<span style="margin-left:auto;font-size:11px;color:var(--muted)">已截断</span>' : "") +
+        '</div><pre class="out">' + body + "</pre>",
+        ok ? "result-ok" : "result-err"
+      );
+      break;
+    }
+
+    case "final":
+      state.finalText = ev.text || "";
+      addItem(
+        '<div class="report-head"><span class="badge b-final">最终报告</span>' +
+        '<strong>审查报告</strong>' +
+        '<span class="sp"></span>' +
+        '<button class="ghost" style="width:auto;padding:4px 12px" id="copyBtn">复制</button>' +
+        "</div>" +
+        '<div class="report-body">' + renderMarkdown(state.finalText) + "</div>",
+        "report"
+      );
+      const copyBtn = $("copyBtn");
+      if (copyBtn) {
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(state.finalText)
+            .then(() => toast("报告已复制到剪贴板"))
+            .catch(() => toast("复制失败，请手动选择文本"));
+        };
+      }
+      break;
+
+    case "report_saved":
+      addItem('<span class="badge b-ok">已保存</span>' + escapeHtml(ev.text || ""));
+      break;
+
+    case "stats":
+      applyStats(ev.data);
+      stampStats();
+      break;
+
+    case "error":
+      if (ev.data && ev.data.usage) {
+        // 即使出错也把已消耗的额度显示出来
+        state.tokensIn = ev.data.usage.prompt_tokens || state.tokensIn;
+        state.tokensOut = ev.data.usage.completion_tokens || state.tokensOut;
+        renderCounters();
+      }
+      addItem('<span class="badge b-err">错误</span>' + escapeHtml(ev.text || "未知错误"), "err");
+      break;
+
+    case "limit":
+      addItem('<span class="badge b-err">步数上限</span>' + escapeHtml(ev.text || ""));
+      break;
+
+    case "done":
+      setStatus("审查完成", "ok");
+      if (ev.data && ev.data.interactive && els.interactive.checked) els.composer.classList.add("show");
+      break;
+
+    default:
+      if (ev.text) addItem(escapeHtml(ev.text));
+  }
+}
+
+/* ------------------------------ API Key ------------------------------ */
+function loadRememberedKey() {
+  try {
+    els.rememberKey.checked = sessionStorage.getItem(KEY_FLAG) === "1" || false;
+    if (els.rememberKey.checked) els.apiKey.value = sessionStorage.getItem(KEY_STORE) || "";
+  } catch (e) { /* 某些环境下 sessionStorage 不可用，忽略即可 */ }
+}
+
+function persistKey() {
+  try {
+    if (els.rememberKey.checked && els.apiKey.value) {
+      sessionStorage.setItem(KEY_STORE, els.apiKey.value);
+      sessionStorage.setItem(KEY_FLAG, "1");
+    } else {
+      sessionStorage.removeItem(KEY_STORE);
+      sessionStorage.removeItem(KEY_FLAG);
+    }
+  } catch (e) { /* 忽略存储失败，Key 仍留在输入框中 */ }
+}
+
+function keyStatus(text, kind) {
+  els.keyStatus.textContent = text || "";
+  els.keyStatus.className = "kstatus" + (kind ? " " + kind : "");
+}
+
+/* 最大步数：1~50 的整数。留空或非法时回退到服务端默认值。
+   这一层校验是为了避免「填了不生效却没有任何提示」——
+   之前这个输入框的值压根没被发送到后端，用户完全无从察觉。 */
+function readMaxSteps() {
+  const raw = (els.maxSteps.value || "").trim();
+  if (!raw) { els.stepsHint.textContent = ""; return undefined; }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 50) {
+    els.stepsHint.textContent = "需为 1~50 的整数，当前将被忽略（用服务端默认值）";
+    els.stepsHint.className = "kstatus bad";
+    return undefined;
+  }
+  els.stepsHint.textContent = "本次将最多执行 " + n + " 步";
+  els.stepsHint.className = "kstatus ok";
+  return n;
+}
+
+function maskKey(key) {
+  if (!key) return "";
+  if (key.length <= 10) return "已填写";
+  return key.slice(0, 6) + "…" + key.slice(-4);
+}
+
+async function testConnection() {
+  const key = els.apiKey.value.trim();
+  if (!key) { keyStatus("请先填写 API Key（留空则使用服务端 .env）", "bad"); return; }
+  els.testBtn.disabled = true;
+  keyStatus("正在测试…", "busy");
+  try {
+    const data = await postJson("/api/test-key", { api_key: key });
+    if (data.ok) {
+      keyStatus("连接成功 · 模型 " + data.model + " · 返回「" + (data.reply || "") + "」", "ok");
+    } else {
+      keyStatus("失败：" + (data.error || "未知错误"), "bad");
+    }
+  } catch (err) {
+    keyStatus("失败：" + err.message, "bad");
+  } finally {
+    els.testBtn.disabled = false;
+  }
+}
+
+/* ------------------------------ 请求 ------------------------------ */
+async function postJson(url, payload) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let data = {};
+  try { data = await resp.json(); } catch (e) { /* 忽略非 JSON 响应 */ }
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || ("HTTP " + resp.status));
+  }
+  return data;
+}
+
+function connectStream(sid) {
+  if (state.source) { state.source.close(); state.source = null; }
+  const source = new EventSource("/api/stream?sid=" + encodeURIComponent(sid));
+  state.source = source;
+
+  const handler = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch (err) { return; }
+    renderEvent(ev);
+  };
+  ["start", "assistant", "tool_call", "tool_result", "final", "report_saved",
+   "stats", "error", "limit", "done"].forEach((name) => source.addEventListener(name, handler));
+
+  // 服务端主动关闭 → 前端不再自动重连，避免历史事件被重放
+  source.addEventListener("closed", () => {
+    source.close();
+    if (state.source === source) state.source = null;
+    finishRun();
+  });
+  source.onerror = () => {
+    if (state.running && source.readyState === EventSource.CLOSED) {
+      // 服务端异常关闭：只在任务仍在跑时提示
+      setStatus("与服务端的连接已断开", "err");
+    }
+  };
+}
+
+function startTimer() {
+  state.t0 = Date.now();
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(tickMeta, 500);
+  tickMeta();
+  setPulse(true);
+  state.running = true;
+  els.startBtn.disabled = true;
+  els.stopBtn.disabled = false;
+}
+
+function finishRun() {
+  state.running = false;
+  setPulse(false);
+  els.startBtn.disabled = false;
+  els.stopBtn.disabled = true;
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  if (state.t0) els.metaText.textContent = "耗时 " + elapsed();
+}
+
+async function startReview() {
+  const payload = {
+    workspace: currentWorkspace(),
+    focus: els.focus.value.trim(),
+    language: els.language.value.trim(),
+    save_report: els.saveReport.checked,
+    interactive: els.interactive.checked,
+  };
+  // 最大步数：必须显式发送，否则后端只会用默认值（曾经漏传，表现为「改了不生效」）
+  const maxSteps = readMaxSteps();
+  if (maxSteps != null) payload.max_steps = maxSteps;
+
+  const key = els.apiKey.value.trim();
+  if (key) payload.api_key = key;   // 有则覆盖服务端 .env，没有就用服务端配置
+  persistKey();
+  if (els.scope.value === "file") {
+    const p = els.path.value.trim();
+    if (!p) { toast("请填写要审查的文件路径"); return; }
+    payload.path = p;
+  }
+
+  hideWelcome();
+  els.composer.classList.remove("show");
+  resetCounters();
+  clearStatsStamp();
+  clearWsHint();
+  setStatus("正在创建会话…");
+  try {
+    const data = await postJson("/api/review", payload);
+    state.sid = data.session_id;
+    startTimer();
+    setStatus("Agent 运行中…");
+    connectStream(state.sid);
+  } catch (err) {
+    setStatus("启动失败", "err");
+    addItem('<span class="badge b-err">错误</span>' + escapeHtml(err.message), "err");
+    finishRun();
+  }
+}
+
+async function sendChat() {
+  const message = els.chatInput.value.trim();
+  if (!message || !state.sid) return;
+  addItem(
+    '<div class="itemhead"><span class="badge b-think">你</span></div>' +
+    '<div style="margin-top:6px;white-space:pre-wrap">' + escapeHtml(message) + "</div>"
+  );
+  els.chatInput.value = "";
+  els.sendBtn.disabled = true;
+  startTimer();
+  setStatus("正在回答追问…");
+  try {
+    await postJson("/api/chat", { session_id: state.sid, message: message });
+    connectStream(state.sid);
+  } catch (err) {
+    addItem('<span class="badge b-err">错误</span>' + escapeHtml(err.message), "err");
+    finishRun();
+  } finally {
+    els.sendBtn.disabled = false;
+  }
+}
+
+/* ------------------------------ 初始化 ------------------------------ */
+function renderToolTags() {
+  els.toolTags.innerHTML = "";
+  (APP_CONFIG.tools || []).forEach((name) => {
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.textContent = name;
+    span.title = name;
+    span.style.cursor = "help";
+    span.onclick = async () => {
+      try {
+        const resp = await fetch("/api/tools");
+        const data = await resp.json();
+        const tool = (data.tools || []).find((t) => t.name === name);
+        if (tool) toast(name + "：" + tool.description);
+      } catch (e) { toast(name); }
+    };
+    els.toolTags.appendChild(span);
+  });
+}
+
+function init() {
+  els.configHint.textContent =
+    "服务目录 " + APP_CONFIG.root + " · 模型 " + APP_CONFIG.model + "（" + APP_CONFIG.provider + "）";
+  renderToolTags();
+
+  els.scope.onchange = () => {
+    els.pathField.style.display = els.scope.value === "file" ? "block" : "none";
+  };
+  els.startBtn.onclick = startReview;
+  els.stopBtn.onclick = () => {
+    if (state.source) { state.source.close(); state.source = null; }
+    setStatus("已停止接收（服务端任务可能仍在运行）", "err");
+    finishRun();
+  };
+  els.clearBtn.onclick = () => {
+    if (state.source) { state.source.close(); state.source = null; }
+    state.sid = null; state.finalText = ""; state.t0 = 0;
+    els.timeline.innerHTML =
+      '<div class="welcome"><h2>已清空</h2><p>修改左侧参数后可再次开始审查。</p></div>';
+    els.welcome = $("welcome");
+    els.composer.classList.remove("show");
+    setStatus("就绪");
+    els.metaText.textContent = "";
+    resetCounters();
+    clearStatsStamp();
+    clearWsHint();
+    finishRun();
+  };
+  els.sendBtn.onclick = sendChat;
+  els.chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }
+  });
+
+  // 恢复「本标签页记住」的 Key，并绑定 Key 相关交互
+  loadRememberedKey();
+  els.testBtn.onclick = testConnection;
+  els.refreshStats.onclick = refreshStats;
+  els.toggleTools.onclick = toggleTools;
+  els.maxSteps.addEventListener("input", readMaxSteps);
+  readMaxSteps();   // 初始化时就给出提示，而不是等到提交才发现填错
+
+  els.rootSelect.addEventListener("change", () => {
+    if (!els.rootSelect.value) return;
+    els.workspace.value = els.rootSelect.value;
+    previewWorkspace();
+  });
+  els.workspace.addEventListener("input", () => {
+    els.rootSelect.value = "";   // 手动输入时清掉快捷选择
+    previewWorkspace();
+  });
+  els.browseBtn.onclick = browseFolder;
+  els.apiKey.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); testConnection(); }
+  });
+  // Key 变化时清掉上一次的测试结论，避免「测的是旧 Key」
+  els.apiKey.addEventListener("input", () => {
+    keyStatus("");
+    persistKey();
+  });
+  els.rememberKey.addEventListener("change", persistKey);
+
+  fetch("/api/health").then((r) => r.json()).then((h) => {
+    // 允许审查的目录由服务端下发，可能包含 --allow-root 指定的额外目录
+    const roots = (h.roots && h.roots.length) ? h.roots : [h.root || "."];
+    setRoots(roots);
+    if (!els.workspace.value) els.workspace.value = h.root || roots[0] || ".";
+    previewWorkspace();
+
+    const serverHasKey = h.api_key_configured !== false;
+    els.keyBadge.textContent = serverHasKey ? "· 服务端已配置" : "· 服务端未配置";
+    if (els.apiKey.value.trim()) {
+      setStatus("就绪（使用页面填写的 Key）");
+      keyStatus("将使用页面填写的 Key（" + maskKey(els.apiKey.value.trim()) + "）");
+    } else if (serverHasKey) {
+      setStatus("就绪");
+    } else {
+      setStatus("请先填写 API Key", "err");
+      keyStatus("服务端未配置 API Key，请在上方填写后再开始审查。", "bad");
+    }
+  }).catch(() => {
+    setRoots(["."]);
+    setStatus("无法连接服务端", "err");
+  });
+}
+
+init();
+</script>
+</body>
+</html>
